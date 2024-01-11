@@ -6,9 +6,10 @@
 #include "esp_log.h"
 
 
-//#define LOG_SHOW_SENDING_TIME
+#define LOG_SHOW_SENDING_TIME
 #define LOG_SHOW_RECEIVING_TIME
 
+#define INCREMENT_SENDING_PERIOD_MILLIS		5000
 
 
 typedef struct {
@@ -43,7 +44,9 @@ void task_incrementer(void *pvParameter)
 		IncrementMessage message = {value, ticksDelta};
 		xQueueSend(queue, &message, 0);
 
-		vTaskDelay(5000 / portTICK_PERIOD_MS);
+		vTaskDelayUntil(&lastWakeTime, INCREMENT_SENDING_PERIOD_MILLIS / portTICK_PERIOD_MS);
+
+
 	}
 }
 

@@ -15,6 +15,9 @@
 
 #define RESTART_IF_STOPPED
 
+//#define STOP_ON_QUEUE_OVERFLOW
+#define HOLD_INCREMENT_IF_QUEUE_OVERFLOW
+
 
 typedef struct {
 	uint32_t value;
@@ -25,6 +28,40 @@ typedef struct {
 static const char *TAG = "LOG";
 
 QueueHandle_t queue;
+TaskHandle_t taskIncrementerHandle;
+TaskHandle_t taskLoggerHandle;
+TaskHandle_t taskStopperHandle;
+
+
+void system_stop() {
+	vTaskResume(taskStopperHandle);
+}
+
+void system_stop_implementation() {
+	if(taskLoggerHandle != NULL) {
+		vTaskDelete(taskLoggerHandle);
+	}
+	if(taskIncrementerHandle != NULL) {
+		vTaskDelete(taskIncrementerHandle);
+	}
+	if(queue != NULL) {
+		xQueueReset(queue);
+	}
+	ESP_LOGE(TAG, "Stopped!");
+
+#ifdef RESTART_IF_STOPPED
+	ESP_LOGE(TAG, "The device will be restarted in a 3 seconds...");
+    vTaskDelay(3000 / portTICK_PERIOD_MS);
+	ESP_LOGE(TAG, "Restarting now.");
+    fflush(stdout);
+	esp_restart();
+#else
+	while(1) {
+		vTaskDelay(1);
+		// Do nothing
+	}
+#endif
+}
 
 
 TickType_t update_ticks_period(TickType_t *previousTicksValue) {
@@ -32,6 +69,13 @@ TickType_t update_ticks_period(TickType_t *previousTicksValue) {
 	TickType_t ticksDelta = currentTicks - *previousTicksValue;
 	*previousTicksValue = currentTicks;
 	return ticksDelta;
+}
+
+
+void task_stopper(void *pvParameter)
+{
+    vTaskDelay(1);
+    system_stop_implementation();
 }
 
 
@@ -47,7 +91,21 @@ void task_incrementer(void *pvParameter)
 		TickType_t ticksDelta = update_ticks_period(&previousTicksValue);
 
 		IncrementMessage message = {value, ticksDelta};
-		xQueueSend(queue, &message, 0);
+		BaseType_t queueSendingResult = xQueueSend(queue, &message, 0);
+
+		if(queueSendingResult == errQUEUE_FULL){
+#ifdef STOP_ON_QUEUE_OVERFLOW
+			ESP_LOGW(TAG, "Queue is full. Can't send new message. Device will be stopped.");
+			system_stop();
+#else
+#ifdef HOLD_INCREMENT_IF_QUEUE_OVERFLOW
+			value--;
+			ESP_LOGW(TAG, "Queue is full. Can't send new message. Increment value is not changed.");
+#else
+			ESP_LOGW(TAG, "Queue is full. Can't send new message. Just continue.");
+#endif
+#endif
+		}
 
 		vTaskDelayUntil(&lastWakeTime, INCREMENT_SENDING_PERIOD_MILLIS / portTICK_PERIOD_MS);
 	}
@@ -80,22 +138,18 @@ void task_logger(void *pvParameter)
 }
 
 
-void system_stop() {
-	ESP_LOGE(TAG, "Stopped!");
-
-#ifdef RESTART_IF_STOPPED
-	ESP_LOGE(TAG, "The device will be restarting in a 3 seconds...");
-    vTaskDelay(3000 / portTICK_PERIOD_MS);
-	ESP_LOGE(TAG, "Restarting now.");
-    fflush(stdout);
-	esp_restart();
-#endif
-}
-
-
-
 void app_main(void)
 {
+    BaseType_t stopperTaskResult = xTaskCreate(&task_stopper, "task_stopper", 2048, NULL, 5, &taskStopperHandle);
+    if(stopperTaskResult == errCOULD_NOT_ALLOCATE_REQUIRED_MEMORY){
+    	ESP_LOGE(TAG, "Not enough memory to allocate for the task 'stopper'.");
+    	system_stop_implementation();
+		return;
+    }
+    vTaskSuspend(taskStopperHandle);
+
+
+
 	queue = xQueueCreate(QUEUE_LENGTH, sizeof(IncrementMessage));
     if(queue == NULL) {
     	ESP_LOGE(TAG, "Not enough memory to allocate for the queue. Try to reduce queue length.");
@@ -103,14 +157,14 @@ void app_main(void)
 		return;
     }
 
-    BaseType_t loggerTaskResult = xTaskCreate(&task_logger, "task_logger", 2048, NULL, 5, NULL);
+    BaseType_t loggerTaskResult = xTaskCreate(&task_logger, "task_logger", 2048, NULL, 5, &taskLoggerHandle);
     if(loggerTaskResult == errCOULD_NOT_ALLOCATE_REQUIRED_MEMORY){
     	ESP_LOGE(TAG, "Not enough memory to allocate for the task 'logger'.");
 		system_stop();
 		return;
     }
 
-    BaseType_t incrementerTaskResult = xTaskCreate(&task_incrementer, "task_incrementer", 2048, NULL, 5, NULL);
+    BaseType_t incrementerTaskResult = xTaskCreate(&task_incrementer, "task_incrementer", 2048, NULL, 5, &taskIncrementerHandle);
     if(incrementerTaskResult == errCOULD_NOT_ALLOCATE_REQUIRED_MEMORY){
     	ESP_LOGE(TAG, "Not enough memory to allocate for the task 'incrementer'.");
 		system_stop();

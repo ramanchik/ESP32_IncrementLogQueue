@@ -126,11 +126,11 @@ void task_logger(void *pvParameter)
 		char receivingTimeString[40] = "";
 
 #ifdef LOG_SHOW_SENDING_TIME
-		snprintf(sendingTimeString, sizeof(sendingTimeString), "  sending time: %lu ticks;",  message.ticks);
+		snprintf(sendingTimeString, sizeof(sendingTimeString), "  sending time: %lums;",  message.ticks * portTICK_PERIOD_MS);
 #endif
 
 #ifdef LOG_SHOW_RECEIVING_TIME
-		snprintf(receivingTimeString, sizeof(receivingTimeString), "  receiving time: %lu ticks;", ticksDelta);
+		snprintf(receivingTimeString, sizeof(receivingTimeString), "  receiving time: %lums;", ticksDelta * portTICK_PERIOD_MS);
 #endif
 
 		ESP_LOGI(TAG, "incremented value: %lu;%s%s", message.value, sendingTimeString, receivingTimeString);
